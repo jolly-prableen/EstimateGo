@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: estimatego-api
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node backend/server.js
+    healthCheckPath: /api

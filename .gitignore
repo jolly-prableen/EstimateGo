@@ -1,0 +1,8 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.tmp-export/
+*.log
+.DS_Store
+backend/data.json

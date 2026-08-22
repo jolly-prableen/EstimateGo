@@ -1,4 +1,4 @@
-# VeloceBill Pro
+# EstimateGo
 
 Expo mobile billing app with a local JSON-backed API.
 
@@ -40,7 +40,7 @@ The backend stores products, bills, documents, and profile details in `backend/d
 
 ## Standalone App (No Expo Go)
 
-The project is configured for Expo EAS Build with app id `com.velocebill.pro`.
+The project is configured for Expo EAS Build with app id `com.estimatego.app`.
 
 Before building a standalone app, set the real backend URL in `eas.json`:
 
