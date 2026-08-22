@@ -1,0 +1,59 @@
+{
+  "profile": {
+    "name": "Veloce Wholesale",
+    "address": "Main Market, New Delhi",
+    "phone": "+91 98765 43210",
+    "tax_id": "",
+    "payment_terms": "Due on receipt"
+  },
+  "products": [
+    {
+      "id": "PRD-1001",
+      "name": "Premium Rice Bag",
+      "sku": "RICE-25KG",
+      "stock": 42,
+      "price": 1850,
+      "unit": "bags"
+    },
+    {
+      "id": "PRD-1002",
+      "name": "Refined Oil Carton",
+      "sku": "OIL-15L",
+      "stock": 18,
+      "price": 2200,
+      "unit": "cartons"
+    },
+    {
+      "id": "PRD-1003",
+      "name": "Sugar Sack",
+      "sku": "SUGAR-50KG",
+      "stock": 8,
+      "price": 4100,
+      "unit": "sacks"
+    }
+  ],
+  "bills": [
+    {
+      "id": "BILL-0001",
+      "customer": "raja",
+      "items": [
+        {
+          "name": "bag",
+          "price": 450,
+          "quantity": 1
+        },
+        {
+          "name": "rings",
+          "price": 100,
+          "quantity": 4
+        }
+      ],
+      "subtotal": 850,
+      "tax": 0,
+      "total": 850,
+      "payment_status": "Pending",
+      "created_at": "2026-08-22T09:02:52.450Z"
+    }
+  ],
+  "documents": []
+}

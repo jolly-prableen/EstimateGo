@@ -1,0 +1,42 @@
+{
+  "name": "velocebill-pro",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "api": "node backend/server.js",
+    "dev": "concurrently \"npm run api\" \"npm run start\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.5",
+    "expo": "^54.0.0",
+    "expo-constants": "~18.0.8",
+    "expo-font": "~14.0.8",
+    "expo-print": "~15.0.7",
+    "expo-router": "~6.0.0",
+    "expo-sharing": "~14.0.7",
+    "expo-splash-screen": "~31.0.10",
+    "express": "^5.1.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-web": "^0.21.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/react": "~19.1.10",
+    "babel-preset-expo": "~54.0.10",
+    "typescript": "~5.9.2"
+  }
+}

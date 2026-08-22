@@ -1,0 +1,5 @@
+.env
+app/_layout.tsx
+app/index.tsx
+app_ctx=c9915d5ced2b656047aa496292a87964b21f4221
+src/hooks/use-icon-fonts.ts
