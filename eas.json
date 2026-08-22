@@ -17,7 +17,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "http://172.16.125.223:4000"
+        "EXPO_PUBLIC_BACKEND_URL": "https://estimatego-api.onrender.com"
       }
     },
     "production": {

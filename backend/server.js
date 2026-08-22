@@ -48,8 +48,26 @@ app.get('/api', (_req, res) => {
 
 app.get('/api/dashboard', (_req, res) => {
   const data = readData();
-  const total_sales = data.bills.reduce((sum, bill) => sum + Number(bill.total || 0), 0);
-  res.json({ total_sales, bill_count: data.bills.length });
+  const dayKey = (iso) => new Date(iso).toLocaleDateString('en-CA');
+  const today = dayKey(new Date());
+  const days = {};
+  let lifetime_sales = 0;
+  for (const bill of data.bills) {
+    const t = Number(bill.total || 0);
+    lifetime_sales += t;
+    const key = dayKey(bill.created_at);
+    if (!days[key]) days[key] = { date: key, total_sales: 0, bill_count: 0 };
+    days[key].total_sales += t;
+    days[key].bill_count += 1;
+  }
+  const dayList = Object.values(days).sort((a, b) => (a.date < b.date ? 1 : -1));
+  res.json({
+    total_sales: days[today] ? days[today].total_sales : 0,
+    bill_count: days[today] ? days[today].bill_count : 0,
+    lifetime_sales,
+    lifetime_bill_count: data.bills.length,
+    days: dayList,
+  });
 });
 
 app.get('/api/products', (_req, res) => {
