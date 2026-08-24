@@ -30,6 +30,7 @@ const seed = {
   bills: [],
   documents: [],
   customers: [],
+  recurring: [],
   users: [
     { id: 'USR-0001', username: 'admin', password: hash('admin123'), role: 'admin' },
     { id: 'USR-0002', username: 'staff', password: hash('staff123'), role: 'staff' },
@@ -46,7 +47,7 @@ function readData() {
     return data;
   }
   data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-  for (const key of ['users', 'customers', 'sessions']) {
+  for (const key of ['users', 'customers', 'sessions', 'recurring']) {
     if (!data[key]) {
       data[key] = JSON.parse(JSON.stringify(seed[key]));
       changed = true;
@@ -198,21 +199,30 @@ app.get('/api/bills', requireAuth, (_req, res) => {
   res.json([...data.bills].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
 });
 
+function computeTotals(items, taxRate, discountInput, discountTypeInput) {
+  const subtotal = (items || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+  const tax = Number(taxRate ?? 0);
+  const discount_type = discountTypeInput === 'percent' ? 'percent' : 'flat';
+  let discount = Number(discountInput || 0);
+  if (!Number.isFinite(discount) || discount < 0) discount = 0;
+  if (discount_type === 'percent') discount = Math.min(discount, 100);
+  const discount_amount = Math.round(discount_type === 'percent' ? subtotal * (discount / 100) : Math.min(discount, subtotal));
+  const taxable = subtotal - discount_amount;
+  const total = Math.round(taxable + taxable * (tax / 100));
+  return { subtotal, tax, discount, discount_type, discount_amount, total };
+}
+
 app.post('/api/bills', requireAuth, (req, res) => {
   const data = readData();
   const items = Array.isArray(req.body.items) ? req.body.items : [];
-  const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
-  const tax = Number(req.body.tax_rate ?? req.body.tax ?? 0);
-  const total = Math.round(subtotal + subtotal * (tax / 100));
+  const totals = computeTotals(items, req.body.tax_rate ?? req.body.tax ?? 0, req.body.discount, req.body.discount_type);
   const modes = ['Cash', 'UPI', 'Card', 'Credit'];
   const payment_mode = modes.includes(req.body.payment_mode) ? req.body.payment_mode : 'Cash';
   const bill = {
     id: nextId('BILL', data.bills),
     customer: String(req.body.customer || '').trim(),
     items,
-    subtotal,
-    tax,
-    total,
+    ...totals,
     payment_mode,
     payment_status: 'Pending',
     created_by: req.user.username,
@@ -235,18 +245,14 @@ app.put('/api/bills/:id', requireAuth, requireAdmin, (req, res) => {
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
 
   const items = Array.isArray(req.body.items) ? req.body.items : [];
-  const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
-  const tax = Number(req.body.tax_rate ?? req.body.tax ?? bill.tax ?? 0);
-  const total = Math.round(subtotal + subtotal * (tax / 100));
+  const totals = computeTotals(items, req.body.tax_rate ?? req.body.tax ?? bill.tax ?? 0, req.body.discount ?? bill.discount, req.body.discount_type ?? bill.discount_type);
 
   applyStock(data, bill.items, +1);
   applyStock(data, items, -1);
 
   bill.customer = String(req.body.customer || bill.customer).trim();
   bill.items = items;
-  bill.subtotal = subtotal;
-  bill.tax = tax;
-  bill.total = total;
+  Object.assign(bill, totals);
   if (['Cash', 'UPI', 'Card', 'Credit'].includes(req.body.payment_mode)) bill.payment_mode = req.body.payment_mode;
 
   writeData(data);
@@ -280,13 +286,86 @@ app.patch('/api/bills/:id/status', requireAuth, (req, res) => {
 app.get('/api/export/bills.csv', requireAuth, (_req, res) => {
   const data = readData();
   const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const rows = [['Bill No', 'Date', 'Customer', 'Payment Mode', 'Status', 'Subtotal', 'Tax %', 'Total', 'Created By'].join(',')];
+  const rows = [['Bill No', 'Date', 'Customer', 'Payment Mode', 'Status', 'Subtotal', 'Discount', 'Tax %', 'Total', 'Created By'].join(',')];
   for (const b of [...data.bills].sort((a, b2) => new Date(a.created_at) - new Date(b2.created_at))) {
-    rows.push([b.id, new Date(b.created_at).toLocaleString('en-IN'), esc(b.customer), b.payment_mode || 'Cash', b.payment_status, b.subtotal, b.tax, b.total, esc(b.created_by || '')].join(','));
+    rows.push([b.id, new Date(b.created_at).toLocaleString('en-IN'), esc(b.customer), b.payment_mode || 'Cash', b.payment_status, b.subtotal, b.discount_amount || 0, b.tax, b.total, esc(b.created_by || '')].join(','));
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="estimatego-bills.csv"');
   res.send('\ufeff' + rows.join('\r\n'));
+});
+
+app.get('/api/recurring', requireAuth, (_req, res) => {
+  res.json(readData().recurring);
+});
+
+function advanceMonth(iso, dayOfMonth) {
+  const d = new Date(iso);
+  const target = new Date(d.getFullYear(), d.getMonth() + 1, 1, 12);
+  const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(dayOfMonth, last));
+  return target.toISOString();
+}
+
+function firstRunFrom(dayOfMonth) {
+  const now = new Date();
+  let candidate = new Date(now.getFullYear(), now.getMonth(), 1, 12);
+  const last = new Date(candidate.getFullYear(), candidate.getMonth() + 1, 0).getDate();
+  candidate.setDate(Math.min(dayOfMonth, last));
+  if (candidate <= now) candidate = new Date(advanceMonth(candidate.toISOString(), dayOfMonth));
+  return candidate.toISOString();
+}
+
+app.post('/api/recurring', requireAuth, (req, res) => {
+  const data = readData();
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  const customer = String(req.body.customer || '').trim();
+  if (!customer || !items.length) return res.status(400).json({ error: 'Customer and at least one item are required' });
+
+  const day = Math.max(1, Math.min(31, Number(req.body.day_of_month) || new Date().getDate()));
+  const totals = computeTotals(items, req.body.tax_rate ?? 0, req.body.discount ?? 0, req.body.discount_type);
+  const template = {
+    id: nextId('REC', data.recurring),
+    customer,
+    items,
+    tax_rate: totals.tax,
+    discount: totals.discount,
+    discount_type: totals.discount_type,
+    payment_mode: ['Cash', 'UPI', 'Card', 'Credit'].includes(req.body.payment_mode) ? req.body.payment_mode : 'Cash',
+    amount: totals.total,
+    day_of_month: day,
+    active: true,
+    created_by: req.user.username,
+    next_run: firstRunFrom(day),
+  };
+  data.recurring.push(template);
+  writeData(data);
+  res.status(201).json(template);
+});
+
+app.delete('/api/recurring/:id', requireAuth, requireAdmin, (req, res) => {
+  const data = readData();
+  const idx = data.recurring.findIndex((r) => r.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Recurring bill not found' });
+  data.recurring.splice(idx, 1);
+  writeData(data);
+  res.json({ ok: true });
+});
+
+app.get('/api/recurring/due', requireAuth, (req, res) => {
+  const now = new Date();
+  const due = readData().recurring.filter((r) => r.active && new Date(r.next_run) <= now);
+  res.json(due);
+});
+
+app.patch('/api/recurring/:id/run', requireAuth, (req, res) => {
+  const data = readData();
+  const template = data.recurring.find((r) => r.id === req.params.id);
+  if (!template) return res.status(404).json({ error: 'Recurring bill not found' });
+  template.last_run = new Date().toISOString();
+  template.next_run = advanceMonth(template.next_run, template.day_of_month);
+  writeData(data);
+  res.json(template);
 });
 
 app.get('/api/documents', requireAuth, (_req, res) => {
