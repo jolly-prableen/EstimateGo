@@ -2,13 +2,17 @@ const cors = require('cors');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
 const dataFile = path.join(__dirname, 'data.json');
+const SALT = 'estimatego-v1';
 
 app.use(cors());
 app.use(express.json());
+
+const hash = (pw) => crypto.createHash('sha256').update(SALT + pw).digest('hex');
 
 const seed = {
   profile: {
@@ -25,13 +29,35 @@ const seed = {
   ],
   bills: [],
   documents: [],
+  customers: [],
+  users: [
+    { id: 'USR-0001', username: 'admin', password: hash('admin123'), role: 'admin' },
+    { id: 'USR-0002', username: 'staff', password: hash('staff123'), role: 'staff' },
+  ],
+  sessions: {},
 };
 
 function readData() {
+  let changed = false;
+  let data;
   if (!fs.existsSync(dataFile)) {
-    writeData(seed);
+    data = JSON.parse(JSON.stringify(seed));
+    writeData(data);
+    return data;
   }
-  return JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+  data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+  for (const key of ['users', 'customers', 'sessions']) {
+    if (!data[key]) {
+      data[key] = JSON.parse(JSON.stringify(seed[key]));
+      changed = true;
+    }
+  }
+  if (!data.users.some((u) => u.username === 'admin')) {
+    data.users.push({ id: 'USR-' + String(data.users.length + 1).padStart(4, '0'), username: 'admin', password: hash('admin123'), role: 'admin' });
+    changed = true;
+  }
+  if (changed) writeData(data);
+  return data;
 }
 
 function writeData(data) {
@@ -42,11 +68,49 @@ function nextId(prefix, items) {
   return `${prefix}-${String(items.length + 1).padStart(4, '0')}`;
 }
 
-app.get('/api', (_req, res) => {
-  res.json({ message: 'Wholesale billing API' });
+function applyStock(data, items, sign) {
+  for (const item of items || []) {
+    const qty = Number(item.quantity || 0);
+    if (!qty) continue;
+    const product =
+      (item.productId && data.products.find((p) => p.id === item.productId)) ||
+      data.products.find((p) => p.name.toLowerCase() === String(item.name || '').toLowerCase());
+    if (product) product.stock = Number(product.stock || 0) + sign * qty;
+  }
+}
+
+function requireAuth(req, res, next) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '') || req.query.token || '';
+  const session = readData().sessions[token];
+  if (!session) return res.status(401).json({ error: 'Please sign in' });
+  req.user = session;
+  req.token = token;
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  next();
+}
+
+app.post('/api/login', (req, res) => {
+  const data = readData();
+  const username = String(req.body.username || '').trim();
+  const user = data.users.find((u) => u.username === username);
+  if (!user || user.password !== hash(String(req.body.password || ''))) {
+    return res.status(401).json({ error: 'Wrong username or password' });
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  data.sessions[token] = { username: user.username, role: user.role, created_at: new Date().toISOString() };
+  writeData(data);
+  res.json({ token, user: { username: user.username, role: user.role } });
 });
 
-app.get('/api/dashboard', (_req, res) => {
+app.get('/api/me', requireAuth, (req, res) => {
+  res.json({ username: req.user.username, role: req.user.role });
+});
+
+app.get('/api/dashboard', requireAuth, (_req, res) => {
   const data = readData();
   const dayKey = (iso) => new Date(iso).toLocaleDateString('en-CA');
   const today = dayKey(new Date());
@@ -70,11 +134,11 @@ app.get('/api/dashboard', (_req, res) => {
   });
 });
 
-app.get('/api/products', (_req, res) => {
+app.get('/api/products', requireAuth, (_req, res) => {
   res.json(readData().products);
 });
 
-app.post('/api/products', (req, res) => {
+app.post('/api/products', requireAuth, (req, res) => {
   const data = readData();
   const product = {
     id: nextId('PRD', data.products),
@@ -92,17 +156,56 @@ app.post('/api/products', (req, res) => {
   res.status(201).json(product);
 });
 
-app.get('/api/bills', (_req, res) => {
+app.get('/api/customers', requireAuth, (_req, res) => {
+  const data = readData();
+  const customers = data.customers.map((c) => {
+    const dues = data.bills
+      .filter((b) => b.customer.toLowerCase() === c.name.toLowerCase() && b.payment_status !== 'Paid')
+      .reduce((s, b) => s + Number(b.total || 0), 0);
+    const open_bills = data.bills.filter((b) => b.customer.toLowerCase() === c.name.toLowerCase() && b.payment_status !== 'Paid').length;
+    return { ...c, dues, open_bills };
+  });
+  res.json(customers);
+});
+
+app.post('/api/customers', requireAuth, (req, res) => {
+  const data = readData();
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Customer name is required' });
+
+  const existing = data.customers.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    existing.phone = req.body.phone || existing.phone;
+    existing.address = req.body.address || existing.address;
+    writeData(data);
+    return res.json(existing);
+  }
+
+  const customer = {
+    id: nextId('CUS', data.customers),
+    name,
+    phone: String(req.body.phone || ''),
+    address: String(req.body.address || ''),
+    created_at: new Date().toISOString(),
+  };
+  data.customers.push(customer);
+  writeData(data);
+  res.status(201).json(customer);
+});
+
+app.get('/api/bills', requireAuth, (_req, res) => {
   const data = readData();
   res.json([...data.bills].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
 });
 
-app.post('/api/bills', (req, res) => {
+app.post('/api/bills', requireAuth, (req, res) => {
   const data = readData();
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
   const tax = Number(req.body.tax_rate ?? req.body.tax ?? 0);
   const total = Math.round(subtotal + subtotal * (tax / 100));
+  const modes = ['Cash', 'UPI', 'Card', 'Credit'];
+  const payment_mode = modes.includes(req.body.payment_mode) ? req.body.payment_mode : 'Cash';
   const bill = {
     id: nextId('BILL', data.bills),
     customer: String(req.body.customer || '').trim(),
@@ -110,7 +213,9 @@ app.post('/api/bills', (req, res) => {
     subtotal,
     tax,
     total,
+    payment_mode,
     payment_status: 'Pending',
+    created_by: req.user.username,
     created_at: new Date().toISOString(),
   };
 
@@ -118,12 +223,48 @@ app.post('/api/bills', (req, res) => {
     return res.status(400).json({ error: 'Customer and at least one item are required' });
   }
 
+  applyStock(data, items, -1);
   data.bills.push(bill);
   writeData(data);
   res.status(201).json(bill);
 });
 
-app.patch('/api/bills/:id/status', (req, res) => {
+app.put('/api/bills/:id', requireAuth, requireAdmin, (req, res) => {
+  const data = readData();
+  const bill = data.bills.find((item) => item.id === req.params.id);
+  if (!bill) return res.status(404).json({ error: 'Bill not found' });
+
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+  const tax = Number(req.body.tax_rate ?? req.body.tax ?? bill.tax ?? 0);
+  const total = Math.round(subtotal + subtotal * (tax / 100));
+
+  applyStock(data, bill.items, +1);
+  applyStock(data, items, -1);
+
+  bill.customer = String(req.body.customer || bill.customer).trim();
+  bill.items = items;
+  bill.subtotal = subtotal;
+  bill.tax = tax;
+  bill.total = total;
+  if (['Cash', 'UPI', 'Card', 'Credit'].includes(req.body.payment_mode)) bill.payment_mode = req.body.payment_mode;
+
+  writeData(data);
+  res.json(bill);
+});
+
+app.delete('/api/bills/:id', requireAuth, requireAdmin, (req, res) => {
+  const data = readData();
+  const idx = data.bills.findIndex((item) => item.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Bill not found' });
+
+  applyStock(data, data.bills[idx].items, +1);
+  data.bills.splice(idx, 1);
+  writeData(data);
+  res.json({ ok: true });
+});
+
+app.patch('/api/bills/:id/status', requireAuth, (req, res) => {
   const data = readData();
   const bill = data.bills.find((item) => item.id === req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
@@ -136,11 +277,23 @@ app.patch('/api/bills/:id/status', (req, res) => {
   res.json(bill);
 });
 
-app.get('/api/documents', (_req, res) => {
+app.get('/api/export/bills.csv', requireAuth, (_req, res) => {
+  const data = readData();
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const rows = [['Bill No', 'Date', 'Customer', 'Payment Mode', 'Status', 'Subtotal', 'Tax %', 'Total', 'Created By'].join(',')];
+  for (const b of [...data.bills].sort((a, b2) => new Date(a.created_at) - new Date(b2.created_at))) {
+    rows.push([b.id, new Date(b.created_at).toLocaleString('en-IN'), esc(b.customer), b.payment_mode || 'Cash', b.payment_status, b.subtotal, b.tax, b.total, esc(b.created_by || '')].join(','));
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="estimatego-bills.csv"');
+  res.send('\ufeff' + rows.join('\r\n'));
+});
+
+app.get('/api/documents', requireAuth, (_req, res) => {
   res.json(readData().documents);
 });
 
-app.post('/api/documents', (req, res) => {
+app.post('/api/documents', requireAuth, (req, res) => {
   const data = readData();
   const document = {
     id: nextId('DOC', data.documents),
@@ -156,11 +309,34 @@ app.post('/api/documents', (req, res) => {
   res.status(201).json(document);
 });
 
-app.get('/api/profile', (_req, res) => {
+app.get('/api/users', requireAuth, requireAdmin, (req, res) => {
+  res.json(readData().users.map(({ password, ...u }) => u));
+});
+
+app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
+  const data = readData();
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+  const role = req.body.role === 'admin' ? 'admin' : 'staff';
+
+  if (!username || password.length < 4) {
+    return res.status(400).json({ error: 'Username and a password of 4+ characters are required' });
+  }
+  if (data.users.some((u) => u.username === username)) {
+    return res.status(400).json({ error: 'That username already exists' });
+  }
+
+  const user = { id: nextId('USR', data.users), username, password: hash(password), role };
+  data.users.push(user);
+  writeData(data);
+  res.status(201).json({ id: user.id, username: user.username, role: user.role });
+});
+
+app.get('/api/profile', requireAuth, (_req, res) => {
   res.json(readData().profile);
 });
 
-app.put('/api/profile', (req, res) => {
+app.put('/api/profile', requireAuth, requireAdmin, (req, res) => {
   const data = readData();
   data.profile = {
     ...data.profile,

@@ -55,5 +55,21 @@
       "created_at": "2026-08-22T09:02:52.450Z"
     }
   ],
-  "documents": []
+  "documents": [],
+  "users": [
+    {
+      "id": "USR-0001",
+      "username": "admin",
+      "password": "1356ab13115cc21b0d3e10cbb305098ffd5fff1de4c4acb050cad573cf38eae4",
+      "role": "admin"
+    },
+    {
+      "id": "USR-0002",
+      "username": "staff",
+      "password": "74af53c22a5a146b663e48274c46fc119d73f21e4f72689c2e89192f655a48ba",
+      "role": "staff"
+    }
+  ],
+  "customers": [],
+  "sessions": {}
 }
